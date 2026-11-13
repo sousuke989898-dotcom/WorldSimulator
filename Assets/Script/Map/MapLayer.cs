@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.CompilerServices;
 using UnityEngine;
 
 namespace Game.World
@@ -16,28 +17,26 @@ namespace Game.World
             _data = new T[width * height];
         }
 
-        public T this[int x, int y]
+        public T[] RawData => _data;
+        public Span<T> AsSpan() => _data;
+
+        public ref T this[int x, int y]
         {
-            get => _data[ToIndex(x, y)];
-            set => _data[ToIndex(x, y)] = value;
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get => ref _data[y * Width + x];
         }
 
-        public T this[Vector2Int p]
+        public ref T this[Vector2Int p]
         {
-            get => _data[ToIndex(p.x, p.y)];
-            set => _data[ToIndex(p.x, p.y)] = value;
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get => ref _data[p.y * Width + p.x];
         }
 
-        public bool IsInBounds(int x, int y) => x >= 0 && x < Width && y >= 0 && y < Height;
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool IsInBounds(int x, int y) => (uint)x < (uint)Width && (uint)y < (uint)Height;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool IsInBounds(Vector2Int p) => IsInBounds(p.x, p.y);
-
-        private int ToIndex(int x, int y) => IsInBounds(x,y)? x + (y * Width) : 0;
-
-        public Span<T> AsSpan() => _data.AsSpan();
-        public Span<T> AsSpan(int start, int length) => _data.AsSpan(start,length);
-        public Span<T> GetRowSpan(int y) => _data.AsSpan(y * Width, Width);
-
-        public void Fill(T value) => Array.Fill(_data, value);
 
         public MapLayer<T> Clone()
         {
@@ -47,4 +46,3 @@ namespace Game.World
         }
     }
 }
-

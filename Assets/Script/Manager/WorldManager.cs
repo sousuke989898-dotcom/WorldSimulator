@@ -1,5 +1,6 @@
 using UnityEngine;
 using Game.World;
+using UnityEngine.Tilemaps;
 
 public class WorldManager : MonoBehaviour
 {
@@ -7,34 +8,36 @@ public class WorldManager : MonoBehaviour
     [SerializeField] private int mapWidth = 256;
     [SerializeField] private int mapHeight = 256;
 
-    [Header("Display Mode")]
-    [SerializeField] private DrawMode currentDrawMode = DrawMode.Terrain;
+    [SerializeField] private Tilemap terrainTileMap;
+    [SerializeField] private TileBase seaTile;
+    [SerializeField] private TileBase groundTile;
+    [SerializeField] private TileBase rockTile;
+    [SerializeField] private TileBase snowTile;
 
-    [Header("Color Settings")]
-    [SerializeField] private Gradient terrainGradient;
-    [SerializeField] private Gradient heightGradient;
-    [SerializeField] private short minHeight = -1000; // 最低標高
-    [SerializeField] private short maxHeight = 1000;  // 最高標高
+    [SerializeField] private TileBase allowTile;
 
 
-    private WorldMap worldMap;
-    private Texture2D mapTexture;
+    [SerializeField] private WaterFlowRenderer waterFlowRenderer;
+    [SerializeField] private WaterRenderer waterRenderer;
+
+    private int seed = 0;
+
+    private WorldMap currentMap;
+    private WorldMap nextMap;
     private SpriteRenderer spriteRenderer;
 
     private WaterSimulation waterSimulation = new();
 
-    public enum DrawMode
-    {
-        Terrain,
-        Height,
-        Water,
-        ThermalEnergy,
-        Temperature
-    }
+    private float tickTimer = 0f;
+
+
 
     void Start()
     {
-        worldMap = new WorldMap(mapWidth, mapHeight);
+        seed = Random.Range(0, 1000000000);
+        currentMap = new WorldMap(mapWidth, mapHeight);
+        currentMap.Initialize(seed);
+        nextMap = currentMap.Clone();
 
         spriteRenderer = GetComponent<SpriteRenderer>();
         if (spriteRenderer == null)
@@ -42,141 +45,70 @@ public class WorldManager : MonoBehaviour
             spriteRenderer = gameObject.AddComponent<SpriteRenderer>();
         }
 
-        mapTexture = new Texture2D(mapWidth, mapHeight)
-        {
-            filterMode = FilterMode.Point
-        };
+        waterFlowRenderer.Initialize(currentMap);
+
 
         // 4. 初回描画
-        UpdateMapDisplay();
+        UpdateTileMap(currentMap);
+        waterRenderer.RenderWater(currentMap);
     }
 
     void Update()
     {
-        if (Input.GetKeyDown(KeyCode.F1)) { currentDrawMode = DrawMode.Terrain; UpdateMapDisplay(); }
-        if (Input.GetKeyDown(KeyCode.F2)) { currentDrawMode = DrawMode.Height; UpdateMapDisplay(); }
-        if (Input.GetKeyDown(KeyCode.F3)) { currentDrawMode = DrawMode.Water; UpdateMapDisplay(); }
-        if (Input.GetKeyDown(KeyCode.F4)) { currentDrawMode = DrawMode.ThermalEnergy; UpdateMapDisplay(); }
-        if (Input.GetKeyDown(KeyCode.F5)) { currentDrawMode = DrawMode.Temperature; UpdateMapDisplay(); }
-
-        if (Input.GetMouseButtonDown(0))
-        {
-            Vector3 mouseWorldPos = Camera.main.ScreenToWorldPoint(Input.mousePosition);
-            
-            // マップの中心を原点(0,0)にしている場合の座標変換
-            // （※WorldManagerの配置やピボットによって微調整が必要です）
-            int x = Mathf.FloorToInt(mouseWorldPos.x + (mapWidth / 2f));
-            int y = Mathf.FloorToInt(mouseWorldPos.y + (mapHeight / 2f));
-
-            if (worldMap.TerrainMap.IsInBounds(x, y))
-            {
-                Debug.Log($"--- Cell ({x}, {y}) ---");
-                Debug.Log($"Height: {worldMap.HeightMap[x, y]}");
-                Debug.Log($"Water: {worldMap.WaterMap[x, y]}");
-                Debug.Log($"Thermal Energy: {worldMap.ThermalEnergyMap[x, y]}");
-                //Debug.Log($"Temperature: {worldMap.GetTemperature(x, y):F2}");
-            }
-
-            
-        }
+        nextMap = currentMap.Clone();
+        tickTimer += Time.deltaTime;
 
         if (Input.GetMouseButtonDown(1))
         {
             Vector3 mouseWorldPos = Camera.main.ScreenToWorldPoint(Input.mousePosition);
-            int x = Mathf.FloorToInt(mouseWorldPos.x + (mapWidth / 2f));
-            int y = Mathf.FloorToInt(mouseWorldPos.y + (mapHeight / 2f));
+            Vector3Int vector = terrainTileMap.WorldToCell(mouseWorldPos);
 
-            if (worldMap.TerrainMap.IsInBounds(x, y))
+            if (nextMap.WaterMap.IsInBounds(vector.x, vector.y))
             {
-                worldMap.WaterMap[x,y] += 50;
+                nextMap.WaterMap[vector.x,vector.y] += 50;
             }
         }
 
-        if (Input.GetKeyDown(KeyCode.Space))
+        if (Input.GetMouseButtonDown(0))
         {
-            waterSimulation.RunWater(worldMap);
-            UpdateMapDisplay();
-        }
+            Vector3 mouseWorldPos = Camera.main.ScreenToWorldPoint(Input.mousePosition);
+            Vector3Int pos = terrainTileMap.WorldToCell(mouseWorldPos);
 
-
-    }
-
-    public void UpdateMapDisplay()
-    {
-        Color[] colorPixels = new Color[mapWidth * mapHeight];
-
-        for (int y = 0; y < mapHeight; y++)
-        {
-            for (int x = 0; x < mapWidth; x++)
+            if (nextMap.WaterMap.IsInBounds(pos.x, pos.y))
             {
-                int index = y * mapWidth + x;
-                colorPixels[index] = GetPixelColorForMode(x, y);
+                Debug.Log(nextMap.HeightMap[pos.x, pos.y] + " " + nextMap.WaterMap[pos.x, pos.y]);
             }
         }
 
-        mapTexture.SetPixels(colorPixels);
-        mapTexture.Apply();
+        if (tickTimer >= 0.2)
+        {
+            tickTimer = 0f;
+            waterSimulation.RunWater(currentMap, nextMap);
+        }
 
-        Sprite sprite = Sprite.Create(
-            mapTexture,
-            new Rect(0, 0, mapWidth, mapHeight),
-            new Vector2(0.5f, 0.5f),
-            1f
-        );
 
-        spriteRenderer.sprite = sprite;
+        waterFlowRenderer.Initialize(nextMap);
+        waterRenderer.RenderWater(nextMap);
+        UpdateTileMap(nextMap);
+        (currentMap,nextMap) = (nextMap,currentMap);
     }
 
-    private Color GetPixelColorForMode(int x, int y)
+    public void UpdateTileMap(WorldMap worldMap)
     {
-        switch (currentDrawMode)
+        for (int x = 0; x < mapWidth; x++)
         {
-            case DrawMode.Terrain:
-                var height = worldMap.HeightMap[x, y];
-                return GetTerrainColor(height);
-
-            case DrawMode.Height:
-                return heightGradient.Evaluate(Mathf.InverseLerp(minHeight,maxHeight,worldMap.HeightMap[x,y]));
-
-            case DrawMode.Water:
-                var water = worldMap.WaterMap[x, y];
-                if (water == 0) return Color.black;
-                float wAlpha = Mathf.Clamp01(water / 50f);
-                return new Color(0f, 0.5f, 1f, wAlpha);
-
-            case DrawMode.ThermalEnergy:
-                int energy = worldMap.ThermalEnergyMap[x, y];
-                float eNorm = Mathf.Clamp01((energy - 8000f) / 4000f);
-                return new Color(eNorm, 0f, 1f - eNorm); // 熱い＝赤、冷たい＝青
-
-            // case DrawMode.Temperature:
-            //     float temp = worldMap.GetTemperature(x, y);
-            //     float tNorm = Mathf.Clamp01((temp - 3000f) / 7000f);
-            //     return GetTemperatureColor(tNorm);
-
-            default:
-                return Color.black;
+            for (int y = 0; y < mapHeight; y++)
+            {
+                int h = worldMap.HeightMap[x,y];
+                TileBase tile;
+                if (h < 0) tile = rockTile;
+                else if (h < 300) tile = groundTile;
+                else if (h < 600) tile = rockTile;
+                else tile = snowTile;
+                terrainTileMap.SetTile(new (x,y,0),tile);
+                int w = worldMap.WaterMap[x,y];
+            }
         }
     }
 
-    private Color GetTemperatureColor(float t)
-    {
-        if (t < 0.5f)
-        {
-            float ratio = t * 2.0f;
-            return new Color(ratio, ratio, 1f); // 青 -> 白
-        }
-        else
-        {
-            float ratio = (t - 0.5f) * 2.0f;
-            return new Color(1f, 1f - ratio, 1f - ratio); // 白 -> 赤
-        }
-    }
-
-    private Color GetTerrainColor(short height)
-    {
-        // 1標高を 0.0f ～ 1.0f の範囲に正規化
-        float t = Mathf.InverseLerp(minHeight, maxHeight, height);
-        return terrainGradient.Evaluate(t);
-    }
 }
